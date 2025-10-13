@@ -1,2 +1,4 @@
-Sundial Ring
+Aquitaine sundial ring
+
+
 
