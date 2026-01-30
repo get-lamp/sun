@@ -37,13 +37,13 @@ const DAYS = [
 
 const DAY_LABEL = [
 	"Summer Solstice",
-	"",
+	"Nov / Oct",
 	"Vernal Equinox",
-	"",
+	"Jul / Aug",
 	"Winter Solstice",
-	"",
+	"Apr / May",
 	"Autumn Equinox",
-	"",
+	"Jan / Feb",
 	"Summer Solstice"
 ]
 
