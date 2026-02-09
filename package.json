@@ -1,7 +1,7 @@
 {
-  "name": "solaring",
+  "name": "aquitaine-sundial",
   "version": "1.0.0",
-  "description": "Create a neat sundial ring!",
+  "description": "Build a neat sundial ring!",
   "main": "index.js",
   "directories": {
     "lib": "lib"
@@ -18,10 +18,18 @@
   },
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "budo browser.js:bundle.js --host localhost --live -- -t babelify",
-    "build": "browserify browser.js -t babelify > bundle.js"
+    "start": "budo main.js:bundle.js --host localhost --live -- -t babelify",
+    "build": "browserify main.js -t babelify > bundle.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/no-carrier/sun.git"
   },
   "author": "no_carrier",
-  "license": "ISC",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/no-carrier/sun/issues"
+  },
+  "homepage": "https://github.com/no-carrier/sun#readme",
   "false": {}
 }

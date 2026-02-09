@@ -1,4 +1,3 @@
-const View = require('./lib/view');
 const {
     buildAnglesData,
     buildMonthLinesData,
@@ -10,6 +9,7 @@ const {
 	drawHourLines,
 	DialMask,
 	drawOutline,
+	View
 } = require('./lib/sundial');
 
 const moment = require('moment');
@@ -79,4 +79,3 @@ drawHourLines(view, hoursData, width, diameter/2, x, y, mask);
 drawHours(view, hoursData, HOURS, x, y, mask);
 drawHole(view, width, 45, diameter/2, x, y);
 drawOutline(view, width, diameter, x, y);
-

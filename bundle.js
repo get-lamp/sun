@@ -1,457 +1,505 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
-const Ring = require('./lib/ring');
-const View = require('./lib/view');
-const solar = require('./lib/declination');
-
-var ring = new Ring({ diameter: 18.5, width: 12 });
-
-var oView = new View('open-ring', { factor: 10 });
-//var cView = new View('closed-ring');
-
-ring.drawOpen(oView, 20, 20);
-//ring.drawClosed(cView, 100, 100);
-
-},{"./lib/declination":2,"./lib/ring":3,"./lib/view":4}],2:[function(require,module,exports){
 const moment = require('moment');
+
+const TIME_ORIGIN = moment('2025-01-01'); // Reference date for day counting
+const EARTH_TILT = 23.439281; // Earth's axial tilt (degrees)
+
+//const LATITUDE = -34.6037;                 // Observer latitude (e.g., Buenos Aires)
+//const LONGITUDE = -58.3821;                // Observer longitude
+
+const LATITUDE = 0.0;
+const LONGITUDE = 0.0;
 
 /**
- *	Sunrise/sunset script. By Matt Kane. 
- * 
- *  Based loosely and indirectly on Kevin Boone's SunTimes Java implementation 
- *  of the US Naval Observatory's algorithm.
- * 
- *  Copyright © 2012 Triggertrap Ltd. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or modify it under the terms of the GNU Lesser General
- * Public License as published by the Free Software Foundation; either version 2.1 of the License, or (at your option)
- * any later version.
- *
- * This library is distributed in the hope that it will be useful,but WITHOUT ANY WARRANTY; without even the implied
- * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
- * details.
- * You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
- * the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA,
- * or connect to: http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+ * Compute number of days since TIME_ORIGIN.
+ * Used to parameterize the Earth's orbit (1 full orbit ≈ 365 days).
  */
-
-/*
-Date.prototype.sunrise = function(latitude, longitude, zenith) {
-	return this.sunriseSet(latitude, longitude, true, zenith);
+function dayDiff(date) {
+  return date.diff(TIME_ORIGIN.year(date.year()), 'days') + 1;
 }
 
-Date.prototype.sunset = function(latitude, longitude, zenith) {
-	return this.sunriseSet(latitude, longitude, false, zenith);
+/**
+ * Convert degrees to radians.
+ * All trig functions in JavaScript use radians.
+ */
+function rad(angle) {
+  return angle * (Math.PI / 180);
 }
 
-Date.prototype.sunriseSet = function(latitude, longitude, sunrise, zenith) {
-	if(!zenith) {
-		zenith = 90.8333;
-	}
+/**
+ * Convert radians to degrees.
+ */
+function deg(angle) {
+  return angle * (180 / Math.PI);
+}
 
+/**
+ * Convert hours to minutes.
+ */
+function hourToMin(h) {
+  return h * 60;
+}
 
-	var hoursFromMeridian = longitude / Date.DEGREES_PER_HOUR,
-		dayOfYear = this.getDayOfYear(),
-		approxTimeOfEventInDays,
-		sunMeanAnomaly,
-		sunTrueLongitude,
-		ascension,
-		rightAscension,
-		lQuadrant,
-		raQuadrant,
-		sinDec,
-		cosDec,
-		localHourAngle,
-		localHour,
-		localMeanTime,
-		time;
+/**
+ * Compute the hour angle (HA) of the Sun.
+ *
+ * Hour angle = 0° at local solar noon (when the Sun crosses the meridian).
+ * The Sun moves 15° per hour (360° / 24h), or 1° every 4 minutes.
+ *
+ * Formula:
+ *    HA = ((t * 60) - 720) / 4
+ * where:
+ *    t = local time in hours (e.g., 13.0 for 1 PM)
+ *    720 min = 12 hours, i.e., the offset for solar noon
+ */
+function hourAngle(hour) {
+  return (hour * 60 - 720) / 4; // 4 min/deg rotation rate
+}
 
-	if (sunrise) {
-        approxTimeOfEventInDays = dayOfYear + ((6 - hoursFromMeridian) / 24);
-    } else {
-        approxTimeOfEventInDays = dayOfYear + ((18.0 - hoursFromMeridian) / 24);
+/**
+ * Compute the solar declination (δ) angle.
+ *
+ * Declination is the latitude at which the Sun is directly overhead at solar noon.
+ * It varies through the year as Earth’s tilt changes the Sun’s apparent north–south position.
+ *
+ * Approximation:
+ *    δ = 23.44° × sin( (360° / 365) × (N + 284) )
+ *
+ * where:
+ *    N = day of year
+ *    23.44° = Earth’s axial tilt
+ *    284 = phase offset aligning the sine wave to solstices/equinoxes
+ */
+function declination(date) {
+  var days = dayDiff(date);
+  return EARTH_TILT * Math.sin(rad((days + 284) / 365 * 360));
+}
+
+/**
+ * Compute the Equation of Time (EoT), in minutes.
+ *
+ * The EoT corrects for the difference between "clock time" and "solar time".
+ * It arises because:
+ *   (1) Earth's orbit is elliptical (non-uniform angular speed),
+ *   (2) the axis is tilted relative to the orbital plane.
+ *
+ * Approximation:
+ *   B = 360° * (N - 81) / 365
+ *   EoT = 9.87·sin(2B) - 7.53·cos(B) - 1.5·sin(B)
+ *
+ * Positive EoT means the sundial is *ahead* of clock time.
+ */
+function timeEquation(date) {
+  var days = dayDiff(date);
+
+  function D(days) {
+    return 360 * ((days - 81) / 365);
+  }
+
+  D = D(days);
+
+  return 9.87 * Math.sin(rad(D * 2)) - 7.53 * Math.cos(rad(D)) - 1.5 * Math.sin(rad(D));
+}
+
+/**
+ * Find the longitude of the nearest standard meridian (time zone center).
+ *
+ * Each time zone spans 15° of longitude (360° / 24h).
+ * This value helps adjust from standard time to local solar time.
+ */
+function localStandardMeridian(lon) {
+  return 15 * Math.round(lon / 15);
+}
+
+/**
+ * Compute the Apparent Solar Time (AST), in hours.
+ *
+ * Apparent Solar Time = clock time adjusted for:
+ *   - longitude difference from time zone meridian
+ *   - Equation of Time correction
+ *
+ * Formula:
+ *   AST = LST + (4 × (LSM - lon)) + EoT
+ *
+ * Explanation:
+ *   - 4 min per degree of longitude (Earth rotates 1° every 4 min)
+ *   - LST = local standard time in minutes
+ *   - EoT in minutes
+ */
+function apparentSolarTime(date, localStandardTime, lon) {
+  var lst = hourToMin(localStandardTime);
+  var lsm = localStandardMeridian(lon);
+  var et = parseFloat(timeEquation(date).toFixed(2));
+  var ast = lst + 4 * (lsm - lon) + et;
+  return ast / 60; // back to hours
+}
+
+/**
+ * Compute the Sun’s altitude angle (height above the horizon).
+ *
+ * Using the standard spherical astronomy formula:
+ *   sin(h) = sin(φ)·sin(δ) + cos(φ)·cos(δ)·cos(H)
+ *
+ * where:
+ *   h = solar altitude (angle above horizon)
+ *   φ = observer latitude
+ *   δ = solar declination
+ *   H = hour angle
+ *
+ * At solar noon (H=0), the Sun reaches its maximum altitude for the day:
+ *   h_max = 90° - |φ - δ|
+ */
+function _altitude(dec, lat, ha) {
+  var lat = rad(lat);
+  var dec = rad(dec);
+  var ha = rad(ha);
+  return Math.asin(Math.cos(lat) * Math.cos(dec) * Math.cos(ha) + Math.sin(lat) * Math.sin(dec));
+}
+
+radianArcRadianLength = function (angle, radius) {
+  return radius * angle;
+};
+
+/**
+ * Public function: compute the Sun’s altitude at a given date and local hour.
+ *
+ * Steps:
+ *   1. Convert local clock time to apparent solar time (correct for EoT and longitude)
+ *   2. Convert solar time to hour angle (degrees from solar noon)
+ *   3. Compute solar declination for that date
+ *   4. Plug into altitude equation
+ */
+exports.altitude = function (date, hour) {
+  var ast = apparentSolarTime(date, hour, LONGITUDE);
+  var ha = hourAngle(ast);
+  var dec = declination(date);
+
+  return deg(_altitude(dec, LATITUDE, ha));
+};
+
+exports.degreeArcRadianLength = function (angle, radius) {
+  return radianArcRadianLength(angle * (Math.PI / 180), radius);
+};
+
+exports.dayDiff = dayDiff;
+
+exports.monthDiff = function (date) {
+  return date.diff(TIME_ORIGIN.year(date.year()), 'months');
+};
+
+},{"moment":4}],2:[function(require,module,exports){
+const dec = require("./declination");
+
+const ANGLES = [45, 90, 135, 180, 225];
+
+module.exports.View = function (canvas, options) {
+
+    options = options || {};
+
+    this._canvas = document.getElementById(canvas);
+    this._ctx = this._canvas.getContext('2d');
+    this._factor = options.factor || 10;
+
+    this.ctx = function () {
+        return this._ctx;
+    };
+
+    this.factor = function () {
+        return this._factor;
+    };
+};
+
+function daysWidth(width, days) {
+    return width / (days.length - 1);
+}
+
+function drawDot(view, x, y, color) {
+    view.ctx().beginPath();
+    view.ctx().arc(x, y, 2.5, 0, 2 * Math.PI, false);
+    view.ctx().fillStyle = color;
+    view.ctx().fill();
+    view.ctx().closePath();
+}
+
+module.exports.buildAnglesData = function (diameter, width) {
+
+    const radius = diameter / 2;
+    let angles = [];
+
+    for (let a in ANGLES) {
+        let h = dec.degreeArcRadianLength(ANGLES[a], radius);
+        angles.push({ x0: 0, y0: h, x1: width, y1: h, deg: ANGLES[a] });
     }
 
-	sunMeanAnomaly = (0.9856 * approxTimeOfEventInDays) - 3.289;
-
-	sunTrueLongitude = sunMeanAnomaly + (1.916 * Math.sinDeg(sunMeanAnomaly)) + (0.020 * Math.sinDeg(2 * sunMeanAnomaly)) + 282.634;
-	sunTrueLongitude =  Math.mod(sunTrueLongitude, 360);
-
-	ascension = 0.91764 * Math.tanDeg(sunTrueLongitude);
-    rightAscension = 360 / (2 * Math.PI) * Math.atan(ascension);
-    rightAscension = Math.mod(rightAscension, 360);
-    
-    lQuadrant = Math.floor(sunTrueLongitude / 90) * 90;
-    raQuadrant = Math.floor(rightAscension / 90) * 90;
-    rightAscension = rightAscension + (lQuadrant - raQuadrant);
-    rightAscension /= Date.DEGREES_PER_HOUR;
-
-    sinDec = 0.39782 * Math.sinDeg(sunTrueLongitude);
-	cosDec = Math.cosDeg(Math.asinDeg(sinDec));
-	cosLocalHourAngle = ((Math.cosDeg(zenith)) - (sinDec * (Math.sinDeg(latitude)))) / (cosDec * (Math.cosDeg(latitude)));
-
-	localHourAngle = Math.acosDeg(cosLocalHourAngle)
-
-	if (sunrise) {
-		localHourAngle = 360 - localHourAngle;
-	} 
-
-	localHour = localHourAngle / Date.DEGREES_PER_HOUR;
-
-	localMeanTime = localHour + rightAscension - (0.06571 * approxTimeOfEventInDays) - 6.622;
-
-	time = localMeanTime - (longitude / Date.DEGREES_PER_HOUR);
-	time = Math.mod(time, 24);
-
-	var midnight = new Date(0);
-		midnight.setUTCFullYear(this.getUTCFullYear());
-		midnight.setUTCMonth(this.getUTCMonth());
-		midnight.setUTCDate(this.getUTCDate());
-	
-
-
-	var milli = midnight.getTime() + (time * 60 *60 * 1000);
-
-
-	return new Date(milli);
-}
-
-Date.DEGREES_PER_HOUR = 360 / 24;
-
-
-// Utility functions
-
-Date.prototype.getDayOfYear = function() {
-	var onejan = new Date(this.getFullYear(),0,1);
-	return Math.ceil((this - onejan) / 86400000);
-}
-
-Math.degToRad = function(num) {
-	return num * Math.PI / 180;
-}
-
-Math.radToDeg = function(radians){
-    return radians * 180.0 / Math.PI;
-}
-
-Math.sinDeg = function(deg) {
-    return Math.sin(deg * 2.0 * Math.PI / 360.0);
-}
-
-
-Math.acosDeg = function(x) {
-    return Math.acos(x) * 360.0 / (2 * Math.PI);
-}
-
-Math.asinDeg = function(x) {
-    return Math.asin(x) * 360.0 / (2 * Math.PI);
-}
-
-
-Math.tanDeg = function(deg) {
-    return Math.tan(deg * 2.0 * Math.PI / 360.0);
-}
-
-Math.cosDeg = function(deg) {
-    return Math.cos(deg * 2.0 * Math.PI / 360.0);
-}
-
-Math.mod = function(a, b) {
-	var result = a % b;
-	if(result < 0) {
-		result += b;
-	}
-	return result;
-}
-
-*/
-
-const TIME_ORIGIN = moment('2017-01-01');
-
-const EARTH_ROTATION_RATE = 360 / 365;
-const EARTH_TILT = 23.6;
-const LATITUDE = 0;
-const LONGITUDE = -58.26;
-
-function daydiff(date) {
-	return date.diff(TIME_ORIGIN, 'days') + 1;
-}
-
-function roughDeclination(date) {
-	return Math.cos((daydiff(date) + 10) * EARTH_ROTATION_RATE * Math.PI / 180) * EARTH_TILT;
-}
-
-function rad(angle) {
-	return angle * (Math.PI / 180);
-}
-
-function deg(angle) {
-	return angle * (180 / Math.PI);
-}
-
-function hourToMin(h) {
-	return h * 60;
-}
-
-function decToHour(num) {
-	return ('0' + Math.floor(num) % 24).slice(-2) + ':' + (num % 1 * 60 + '0').slice(0, 2);
-}
-
-// lib
-function hourAngle(hour) {
-	return (hour * 60 - 720) / 4; //4 min/deg solar rotation rate
-}
-
-function declination(date) {
-	var days = daydiff(date);
-	return 23.45 * Math.sin(rad((days + 284) / 365 * 360));
-}
-
-function timeEquation(date) {
-	var days = daydiff(date);
-
-	function D(days) {
-		return 360 * ((days - 81) / 365);
-	}
-
-	D = D(days);
-
-	return 9.87 * Math.sin(rad(D * 2)) - 7.53 * Math.cos(rad(D)) - 1.5 * Math.sin(rad(D));
-}
-
-function localStandardMeridian(lon) {
-	return 15 * Math.round(lon / 15);
-}
-
-function apparentSolarTime(date, localStandardTime, lon) {
-
-	// convert to min
-	var lst = hourToMin(localStandardTime);
-	var lsm = localStandardMeridian(lon);
-	var et = parseFloat(timeEquation(date).toFixed(2));
-	var ast = lst + 4 * (lsm - lon) + et;
-	return ast / 60;
-}
-
-// \lib
-
-function altitude(dec, lat, ha) {
-
-	var lat = rad(lat);
-	var dec = rad(dec);
-	var ha = rad(ha);
-	return Math.asin(Math.cos(lat) * Math.cos(dec) * Math.cos(ha) + Math.sin(lat) * Math.sin(dec));
-}
-
-exports.altitude = function (date, hour) {
-	var ast = apparentSolarTime(date, hour, LONGITUDE);
-	var ha = hourAngle(ast);
-	var dec = declination(date);
-
-	return deg(altitude(dec, LATITUDE, ha));
+    return angles;
 };
 
-},{"moment":5}],3:[function(require,module,exports){
-const dec = require('./declination');
+module.exports.buildMonthLinesData = function (days, width, arc0, arc1, labels) {
+
+    const lx = daysWidth(width, days);
+    let lines = [];
+
+    // draw solstice and equinox lines
+    for (let i = 0; i < days.length; i++) {
+        lines.push({ x0: lx * i, y0: arc0, x1: lx * i, y1: arc1, label: labels[i] });
+    }
+
+    return lines;
+};
+
+module.exports.buildHoursData = function (days, width, hours, originDeg, radius) {
+
+    let rows = [];
+    const lx = daysWidth(width, days);
+
+    const o = dec.degreeArcRadianLength(originDeg, radius);
+
+    for (let s in hours) {
+
+        let cols = [];
+
+        for (let i = 0; i < days.length; i++) {
+
+            const alt = dec.altitude(days[i], hours[s]);
+            const h = dec.degreeArcRadianLength(alt * 2, radius);
+
+            cols.push({ x: lx * i, y: o + h });
+        }
+
+        rows.push(cols);
+    }
+
+    return rows;
+};
+
+module.exports.drawAngles = function (view, data, x = 0, y = 0) {
+
+    view.ctx().strokeStyle = '#000000';
+
+    // draw degree lines
+    for (let h in data) {
+
+        const x0 = x + data[h].x0 * view.factor();
+        const y0 = y + data[h].y0 * view.factor();
+        const x1 = x + data[h].x1 * view.factor();
+        const y1 = y + data[h].y1 * view.factor();
+
+        view.ctx().beginPath();
+        view.ctx().moveTo(x0, y0);
+        view.ctx().lineTo(x1, y1);
+        view.ctx().stroke();
+
+        view.ctx().fillText(data[h].deg.toString(), x0 - 20, y0 + 5);
+    }
+};
+
+module.exports.drawMonthLines = function (view, days, arc1, x = 0, y = 0) {
+
+    let labels = [];
+
+    for (let d = 0; d < days.length; d++) {
+
+        const x0 = x + days[d].x0 * view.factor();
+        const y0 = y + days[d].y0 * view.factor();
+        const x1 = x + days[d].x1 * view.factor();
+        const y1 = y + days[d].y1 * view.factor();
+
+        d % 2 === 0 ? view.ctx().strokeStyle = '#0099ff' : view.ctx().strokeStyle = '#dfdfdf';
+
+        view.ctx().beginPath();
+        view.ctx().moveTo(x0, y0);
+        view.ctx().lineTo(x1, y1);
+        view.ctx().stroke();
+
+        labels.push({ x: x1, y: y1, label: days[d].label });
+    }
+
+    view.ctx().save();
+    view.ctx().rotate(-Math.PI / 2);
+    view.ctx().font = "10px Arial";
+    view.ctx().fillStyle = "black";
+    view.ctx().textAlign = "right";
+    view.ctx().textBaseline = "middle";
+    view.ctx().fillStyle = "#0099ff";
+
+    for (let l in labels) {
+        let offset = l == 0 ? 8 : l == labels.length - 1 ? -8 : 0;
+        view.ctx().fillText(labels[l].label, -(labels[l].y + 10), labels[l].x + offset);
+    }
+
+    view.ctx().restore();
+};
+
+module.exports.drawHours = function (view, hours, hoursText, x = 0, y = 0, mask = null) {
+
+    view.ctx().font = "10px Arial";
+    view.ctx().fillStyle = "black";
+    view.ctx().textAlign = "center";
+    view.ctx().textBaseline = "middle";
+
+    view.ctx().save();
+    if (mask) {
+        mask();
+    }
+
+    for (let hy in hours) {
+
+        for (let hx in hours[hy]) {
+
+            var x0 = x + hours[hy][hx].x * view.factor();
+            var y0 = y + hours[hy][hx].y * view.factor();
+
+            drawDot(view, x0, y0, 'tomato');
+        }
+        view.ctx().fillText(hoursText[hy], x0 + 10, y0);
+    }
+    view.ctx().restore();
+};
+
+module.exports.drawHourLines = function (view, points, width, radius, x = 0, y = 0, mask = null) {
+
+    view.ctx().save();
+    view.ctx().lineWidth = 1;
+    view.ctx().strokeStyle = 'blue';
+
+    if (mask) {
+        mask();
+    }
+
+    var ctrl = [];
+
+    for (let py in points) {
+
+        const x0 = x + points[py][0].x * view.factor();
+        const y0 = y + points[py][0].y * view.factor();
+
+        view.ctx().beginPath();
+        view.ctx().moveTo(x0, y0);
+
+        for (let px = 1; px < points[py].length; px++) {
+
+            const cpx = x + (points[py][px - 1].x + points[py][px].x) / 2 * view.factor();
+            const cpy = y + (points[py][px - 1].y + points[py][px].y) / 2 * view.factor();
+
+            const x1 = x + points[py][px].x * view.factor();
+            const y1 = y + points[py][px].y * view.factor();
+
+            const slope = y1 - points[py][px - 1].y / x1 - points[py][px - 1].x;
+
+            //view.ctx().lineTo(x1, y1);
+            view.ctx().quadraticCurveTo(cpx, cpy, x1, y1);
+
+            ctrl.push({ x: cpx, y: cpy });
+        }
+
+        view.ctx().stroke();
+        view.ctx().closePath();
+    }
+
+    // draw ctrl points
+    for (c in ctrl) {
+        drawDot(view, ctrl[c].x, ctrl[c].y, 'green');
+    }
+
+    view.ctx().restore();
+};
+
+module.exports.drawHole = function (view, width, deg, radius, x, y) {
+    const x0 = x + width / 2 * view.factor();
+    const y0 = y + dec.degreeArcRadianLength(360 - deg, radius) * view.factor();
+
+    view.ctx().beginPath();
+    view.ctx().arc(x0, y0, 2.5, 0, 2 * Math.PI, false);
+    view.ctx().fillStyle = 'gold';
+    view.ctx().fill();
+    view.ctx().closePath();
+};
+
+module.exports.drawOutline = function (view, width, diameter, x, y) {
+
+    const w = width * view.factor();
+    const h = diameter * Math.PI * view.factor();
+
+    view.ctx().beginPath();
+    view.ctx().strokeStyle = '#000000';
+    view.ctx().rect(x, y, w, h);
+    view.ctx().stroke();
+};
+
+module.exports.DialMask = function (view, width, radius, x, y) {
+    return function () {
+        const o = dec.degreeArcRadianLength(ANGLES[0], radius) * view.factor();
+        const w = width * view.factor();
+
+        view.ctx().beginPath();
+        view.ctx().rect(x - 5, o, w + 20, dec.degreeArcRadianLength(ANGLES[4], radius) * view.factor());
+        view.ctx().save();
+        view.ctx().clip();
+    };
+};
+
+},{"./declination":1}],3:[function(require,module,exports){
+const {
+	buildAnglesData,
+	buildMonthLinesData,
+	buildHoursData,
+	drawAngles,
+	drawMonthLines,
+	drawHole,
+	drawHours,
+	drawHourLines,
+	DialMask,
+	drawOutline,
+	View
+} = require('./lib/sundial');
+
 const moment = require('moment');
 
-const SUMMER_SOLSTICE = moment('2025-9-21');
+const AE_SS = moment('2025-02-15');
+const SUMMER_SOLSTICE = moment('2025-12-21');
+const VE_SS = moment('2025-10-15');
+const VERNAL_EQUINOX = moment('2025-09-22');
+const WS_VE = moment('2025-07-15');
 const WINTER_SOLSTICE = moment('2025-06-21');
-const VERNAL_EQUINOX = moment('2025-03-20');
-const AUTUM_EQUINOX = moment('2025-09-22');
+const AE_WS = moment('2025-04-15');
+const AUTUMN_EQUINOX = moment('2025-03-20');
 
-module.exports = function (measures) {
+const DAYS = [SUMMER_SOLSTICE, VE_SS, VERNAL_EQUINOX, WS_VE, WINTER_SOLSTICE, AE_WS, AUTUMN_EQUINOX, AE_SS, SUMMER_SOLSTICE];
 
-	this._width = measures.width;
-	this._diameter = measures.diameter;
-	this._radius = this._diameter / 2;
+const DAY_LABEL = ["Summer Solstice", "Nov / Oct", "Vernal Equinox", "Jul / Aug", "Winter Solstice", "Apr / May", "Autumn Equinox", "Jan / Feb", "Summer Solstice"];
 
-	this.width = function () {
-		return this._width;
-	};
-
-	this.radius = function () {
-		return this._radius;
-	};
-
-	this.diameter = function () {
-		return this._diameter;
-	};
-
-	this.length = function () {
-		return this._diameter * Math.PI;
-	};
-
-	this.radianArcRadianLength = function (angle) {
-		return this.radius() * angle;
-	};
-
-	this.degreeArcRadianLength = function (angle) {
-		return this.radianArcRadianLength(angle * (Math.PI / 180));
-	};
-
-	this.radianArcDegreeLength = function (angle) {
-		return this.radianArcRadianLength(angle * (180 / Math.PI));
-	};
-
-	this.drawOpen = function (view, x, y) {
-
-		this.drawGrid(view, x, y);
-		this.drawDots(view, x, y);
-	};
-
-	this.drawGrid = function (view, x, y) {
-
-		var w = this.width() * view.factor();
-		var l = this.length() * view.factor();
-
-		// outline
-		view.ctx().rect(x, y, w, this.length() * view.factor());
-		view.ctx().stroke();
-
-		// grid
-		var angles = [45, 90, 135, 180, 225];
-		var anglesY = [];
-
-		// convert angles to length
-		for (a in angles) {
-			anglesY.push(this.degreeArcRadianLength(angles[a]) * view.factor());
-		}
-
-		for (h in anglesY) {
-			view.ctx().beginPath();
-			view.ctx().moveTo(x, y + anglesY[h]);
-			view.ctx().lineTo(x + w, y + anglesY[h]);
-			view.ctx().stroke();
-		}
-
-		// summer solstice line
-		view.ctx().beginPath();
-		view.ctx().moveTo(x + 20, y + anglesY[0]);
-		view.ctx().lineTo(x + 20, y + anglesY[4]);
-		view.ctx().strokeStyle = '#0099ff';
-		view.ctx().stroke();
-
-		// equinox line
-		view.ctx().beginPath();
-		view.ctx().moveTo(x + w / 2, y + anglesY[0]);
-		view.ctx().lineTo(x + w / 2, y + anglesY[4]);
-		view.ctx().stroke();
-
-		// winter solstice line
-		view.ctx().beginPath();
-		view.ctx().moveTo(x + w - 20, y + anglesY[0]);
-		view.ctx().lineTo(x + w - 20, y + anglesY[4]);
-		view.ctx().stroke();
-	};
-
-	this.drawCurveThroughNPoints = function (view, points) {
-
-		var restore = view.ctx().lineWidth;
-
-		view.ctx().beginPath();
-		view.ctx().lineWidth = 2;
-		view.ctx().strokeStyle = 'blue';
-
-		// move to the first point
-		view.ctx().moveTo(points[0].x, points[0].y);
-
-		for (i = 1; i < points.length - 1; i++) {
-			var xc = (points[i].x + points[i + 1].x) / 2;
-			var yc = (points[i].y + points[i + 1].y) / 2;
-			view.ctx().quadraticCurveTo(points[i].x, points[i].y, xc, yc);
-		}
-
-		// curve through the last two points
-		view.ctx().quadraticCurveTo(points[i].x, points[i].y, points[i].x, points[i].y);
-		view.ctx().stroke();
-		view.ctx().lineWidth = restore;
-		view.ctx().closePath();
-	};
-
-	this.drawDots = function (view, x, y) {
-
-		var dotsize = 3;
-		var w = this.width() * view.factor();
-		var o = this.degreeArcRadianLength(45) * view.factor();
-		var hours = [6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
-
-		for (s in hours) {
-
-			var curve = [];
-			view.ctx().lineWidth = 0;
-
-			// summer solstice noon
-			var alt = dec.altitude(SUMMER_SOLSTICE, hours[s]);
-			h = o + y + this.degreeArcRadianLength(alt * 2) * view.factor();
-
-			view.ctx().beginPath();
-			view.ctx().arc(x + w - 20, h, dotsize, 0, 2 * Math.PI, false);
-			view.ctx().fillStyle = 'gold';
-			view.ctx().fill();
-			view.ctx().closePath();
-
-			curve.push({ x: x + w - 20, y: h }
-
-			// vernal equinox noon
-			);var alt = dec.altitude(VERNAL_EQUINOX, hours[s]);
-			h = o + y + this.degreeArcRadianLength(alt * 2) * view.factor();
-
-			view.ctx().beginPath();
-			view.ctx().arc(x + w / 2, h, dotsize, 0, 2 * Math.PI, false);
-			view.ctx().fillStyle = 'gold';
-			view.ctx().fill();
-			view.ctx().closePath();
-
-			curve.push({ x: x + w / 2, y: h }
-
-			// winter solstice noon
-			);var alt = dec.altitude(WINTER_SOLSTICE, hours[s]);
-			h = o + y + this.degreeArcRadianLength(alt * 2) * view.factor();
-
-			view.ctx().beginPath();
-			view.ctx().arc(x + 20, h, dotsize, 0, 2 * Math.PI, false);
-			view.ctx().fillStyle = 'gold';
-			view.ctx().fill();
-			view.ctx().closePath();
-
-			curve.push({ x: x + 20, y: h });
-
-			this.drawCurveThroughNPoints(view, curve);
-		}
-	};
-
-	this.drawClosed = function (view, x, y) {
-
-		// outline
-		view.ctx().beginPath();
-		view.ctx().arc(x, y, this.radius() * view.factor(), 0, 2 * Math.PI);
-		view.ctx().stroke();
-	};
+const RingData = {
+	width: 12,
+	diameter: 18.5,
+	x: 0,
+	y: 0
 };
 
-},{"./declination":2,"moment":5}],4:[function(require,module,exports){
-module.exports = function (canvas, options) {
+const HOUR_SUNRISE = 5;
+const HOUR_DIV = 1;
+const HOURS = [...Array(8 / HOUR_DIV).keys()].map(i => i * HOUR_DIV + HOUR_SUNRISE);
 
-	options = options || {};
+const width = 12;
+const diameter = 18.5;
+const x = 20;
+const y = 20;
 
-	this._canvas = document.getElementById(canvas);
-	this._ctx = this._canvas.getContext('2d');
-	this._factor = options.factor || 10;
+var view = new View('open-ring', { factor: 16 });
 
-	this.canvas = function () {
-		return this._canvas;
-	};
+const anglesData = buildAnglesData(diameter, width);
+const daysData = buildMonthLinesData(DAYS, width, anglesData[0].y0, anglesData[4].y0, DAY_LABEL);
+const hoursData = buildHoursData(DAYS, width, HOURS, anglesData[0].deg, diameter / 2);
 
-	this.ctx = function () {
-		return this._ctx;
-	};
+const mask = DialMask(view, width, diameter / 2, x, y);
 
-	this.factor = function () {
-		return this._factor;
-	};
-};
+drawAngles(view, anglesData, x, y);
+drawMonthLines(view, daysData, anglesData[4].y0, x, y);
+drawHourLines(view, hoursData, width, diameter / 2, x, y, mask);
+drawHours(view, hoursData, HOURS, x, y, mask);
+drawHole(view, width, 45, diameter / 2, x, y);
+drawOutline(view, width, diameter, x, y);
 
-},{}],5:[function(require,module,exports){
+},{"./lib/sundial":2,"moment":4}],4:[function(require,module,exports){
 //! moment.js
 //! version : 2.18.1
 //! authors : Tim Wood, Iskren Chernev, Moment.js contributors
@@ -4916,4 +4964,4 @@ return hooks;
 
 })));
 
-},{}]},{},[1]);
+},{}]},{},[3]);
